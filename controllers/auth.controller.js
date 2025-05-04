@@ -49,7 +49,8 @@ exports.login = async (req, res, next) => {
       userId: user._id,
       role: user.role,
       email: user.email,
-      name: user.name
+      name: user.name,
+      fullname: `${user.name} ${user.lastName} ${user.maternalLastName}`
     }
 
     res.status(200).json({ token, userData});

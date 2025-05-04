@@ -40,9 +40,16 @@ const userSchema = new mongoose.Schema({
     otherActivities: [String],
     communicationPreferences: [String]
   },
+  
   onboardingCompleted: {
     type: Boolean,
     default: false
+  },
+
+  status: {
+    type: String,
+    enum: ['active', 'suspended'],
+    default: 'active'
   }
 }, {
   timestamps: true
