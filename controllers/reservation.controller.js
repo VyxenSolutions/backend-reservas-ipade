@@ -1,7 +1,19 @@
 const Reservation = require("../models/reservation.model");
 const Court = require("../models/court.model");
 const User = require("../models/user.model");
-const { isBefore, parse, addMinutes, format } = require("date-fns");
+const {
+  isBefore,
+  parse,
+  addMinutes,
+  format,
+  differenceInMinutes,
+  isAfter,
+} = require("date-fns");
+const { sendEmail } = require("../services/mail.service");
+const {
+  getReservationCreatedTemplate,
+  getReservationConfirmedTemplate,
+} = require("../services/mail.templates");
 
 exports.createReservation = async (req, res, next) => {
   try {
@@ -52,32 +64,26 @@ exports.createReservation = async (req, res, next) => {
       const now = new Date();
       const rDateTime = new Date(`${r.date}T${r.startTime}`);
       if (Math.abs(rDateTime - now) < 24 * 60 * 60 * 1000) {
-        return res
-          .status(400)
-          .json({
-            message: "Ya tienes una reserva activa dentro de las próximas 24h",
-          });
+        return res.status(400).json({
+          message: "Ya tienes una reserva activa dentro de las próximas 24h",
+        });
       }
     }
 
     // Validar modalidad y jugadores
     if (modality === "singles" && playerEmails.length < 1) {
-      return res
-        .status(400)
-        .json({
-          message: "Debes incluir 1 jugador adicional para modalidad singles",
-        });
+      return res.status(400).json({
+        message: "Debes incluir 1 jugador adicional para modalidad singles",
+      });
     }
 
     if (
       modality === "dobles" &&
       (playerEmails.length < 2 || playerEmails.length > 3)
     ) {
-      return res
-        .status(400)
-        .json({
-          message: "En dobles puedes invitar de 1 a 3 jugadores adicionales",
-        });
+      return res.status(400).json({
+        message: "En dobles puedes invitar de 1 a 3 jugadores adicionales",
+      });
     }
 
     const players = await Promise.all(
@@ -109,44 +115,84 @@ exports.createReservation = async (req, res, next) => {
       modality,
     });
 
+    // Enviar correos tras crear reserva
+    try {
+      const creator = await User.findById(userId);
+      const cancha = await Court.findById(courtId);
+      const template = getReservationCreatedTemplate(
+        creator,
+        date,
+        startTime,
+        cancha.name
+      );
+      await sendEmail({ to: creator.email, ...template });
+
+      for (const playerId of players) {
+        const player = await User.findById(playerId);
+        const playerTemplate = getReservationCreatedTemplate(
+          player,
+          date,
+          startTime,
+          cancha.name
+        );
+        await sendEmail({ to: player.email, ...playerTemplate });
+      }
+    } catch (emailErr) {
+      console.error("Error al enviar correos de reserva:", emailErr);
+    }
+
     res.status(201).json({ message: "Reserva creada", reservation });
   } catch (err) {
     next(err);
   }
 };
 
-exports.confirmReservation = async (req, res, next) => {
+exports.confirmFromQR = async (req, res, next) => {
   try {
-    const { courtId, userId, date, time } = req.query;
+    const userId = req.user.id;
+    const { courtId } = req.query;
+    const now = new Date();
+    const today = format(now, "yyyy-MM-dd");
 
-    const reservation = await Reservation.findOne({
+    const reservations = await Reservation.find({
       court: courtId,
-      date,
+      date: today,
       $or: [{ createdBy: userId }, { players: userId }],
-      startTime: time,
     });
 
-    if (!reservation) {
-      return res
-        .status(404)
-        .json({
-          message:
-            "No se encontró reserva activa para ese usuario en ese horario y cancha",
-        });
-    }
-
-    // Puedes agregar un campo de confirmación en el modelo:
-    // confirmedBy: [userId]
-    if (!reservation.confirmedBy) reservation.confirmedBy = [];
-    if (!reservation.confirmedBy.includes(userId)) {
-      reservation.confirmedBy.push(userId);
-      await reservation.save();
-    }
-
-    return res.status(200).json({
-      message: "Reserva confirmada con éxito",
-      reservationId: reservation._id,
+    const match = reservations.find((r) => {
+      const start = parse(r.startTime, "HH:mm", now);
+      const minutesDiff = differenceInMinutes(now, start);
+      return minutesDiff >= 0 && minutesDiff <= 15;
     });
+
+    if (!match) {
+      return res.status(404).json({
+        message:
+          "No se encontró reserva activa dentro de los 15 minutos de tolerancia",
+      });
+    }
+
+    if (!match.confirmedBy.includes(userId)) {
+      match.confirmedBy.push(userId);
+      await match.save();
+    }
+
+    try {
+      const confirmingUser = await User.findById(userId);
+      const cancha = await Court.findById(courtId);
+
+      const confirmTemplate = getReservationConfirmedTemplate(
+        confirmingUser,
+        match.date,
+        cancha?.name || "Cancha"
+      );
+      await sendEmail({ to: confirmingUser.email, ...confirmTemplate });
+    } catch (emailErr) {
+      console.error("Error al enviar correo de confirmación:", emailErr);
+    }
+
+    res.status(200).json({ message: "Reserva confirmada correctamente" });
   } catch (err) {
     next(err);
   }
@@ -168,4 +214,3 @@ exports.getMyReservations = async (req, res, next) => {
     next(err);
   }
 };
- 
