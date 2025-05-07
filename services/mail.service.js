@@ -1,11 +1,19 @@
 const mailgun = require('mailgun-js');
 
-const mg = mailgun({
-  apiKey: '7ef7139dde7b9e190bc7df6816a1771e-a908eefc-1f95e5fb',
-  domain: 'mail.xyxen-solutions.com'
-});
+let mg;
+function initMailer() {
+  if (!mg) {
+    mg = mailgun({
+      apiKey: process.env.MAILGUN_API_KEY,
+      domain: process.env.MAILGUN_DOMAIN
+    });
+  }
+  return mg;
+}
 
 exports.sendEmail = ({ to, subject, text, html }) => {
+  const mailer = initMailer();
+
   const data = {
     from: 'Hey! Open <noreply@heyopen.mx>',
     to,
@@ -14,5 +22,5 @@ exports.sendEmail = ({ to, subject, text, html }) => {
     html
   };
 
-  return mg.messages().send(data);
+  return mailer.messages().send(data);
 };
