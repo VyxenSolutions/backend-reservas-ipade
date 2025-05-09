@@ -1,4 +1,6 @@
 const User = require('../models/user.model');
+const Reservation = require('../models/reservation.model');
+const Court = require('../models/court.model');
 const bcrypt = require('bcrypt');
 
 exports.completeOnboarding = async (req, res, next) => {
@@ -101,5 +103,63 @@ exports.searchUsersByEmail = async (req, res, next) => {
     next(err);
   }
 };
+
+exports.getProfile = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+
+    const user = await User.findById(userId).select('-password');
+    if (!user) return res.status(404).json({ message: 'Usuario no encontrado' });
+
+    // Contar reservas y confirmar asistencia
+    const allReservations = await Reservation.find({
+      $or: [{ createdBy: userId }, { players: userId }]
+    });
+
+    const upcomingReservations = allReservations.filter(r => new Date(`${r.date}T${r.startTime}`) > new Date());
+
+    const confirmed = allReservations.filter(r => r.confirmedBy?.includes(userId));
+    const lastConfirmed = confirmed.sort((a, b) => new Date(`${b.date}T${b.startTime}`) - new Date(`${a.date}T${a.startTime}`))[0];
+
+    res.status(200).json({
+      personal: {
+        name: user.name,
+        lastName: user.lastName,
+        maternalLastName: user.maternalLastName,
+        email: user.email,
+        phone: user.phone?.internationalNumber || '',
+        birthDate: user.birthDate,
+        role: user.role,
+        status: user.status,
+      },
+      sportsProfile: {
+        gender: user.gender,
+        experienceLevel: user.experienceLevel,
+        playFrequency: user.playFrequency,
+        preferredTime: user.preferredTime,
+        preferredRacketSports: user.preferredRacketSports,
+        connectWithOthers: user.connectWithOthers,
+        interestedInEvents: user.interestedInEvents,
+      },
+      onboarding: user.onboarding,
+      activity: {
+        totalReservations: allReservations.length,
+        upcomingReservations: upcomingReservations.length,
+        lastConfirmedReservation: lastConfirmed
+          ? {
+              date: lastConfirmed.date,
+              time: lastConfirmed.startTime,
+              court: await Court.findById(lastConfirmed.court).then(c => c?.name || 'N/A')
+            }
+          : null,
+        noShowCount: user.noShowCount || 0,
+        updatedAt: user.updatedAt
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 
 
